@@ -47,26 +47,6 @@ int set_memory_limit(pid_t pid, size_t memory_limit_bytes) {
     return 0;
 }
 
-int was_oom_killed(pid_t pid) {
-    char path[256];
-    char buffer[1024];
-    int fd;
-
-    snprintf(path, sizeof(path), "/sys/fs/cgroup/judge_%d/memory.events", pid);
-    fd = open(path, O_RDONLY);
-    if (fd < 0) return 0;
-
-    ssize_t bytes = read(fd, buffer, sizeof(buffer)-1);
-    close(fd);
-
-    if (bytes > 0) {
-        buffer[bytes] = '\0';
-        return strstr(buffer, "oom_kill") != NULL;
-    }
-
-    return 0;
-}
-
 void cleanup_cgroup(pid_t pid) {
     char path[256];
     snprintf(path, sizeof(path), "/sys/fs/cgroup/judge_%d", pid);
@@ -114,7 +94,7 @@ int main(int argc, char* argv[]) {
     int memoryLimit = atoi(argv[3]); // in MB
 
     if (!timeLimit) timeLimit = 20;
-    if (!memoryLimit) memoryLimit = 2;
+    if (!memoryLimit) memoryLimit = 512;
 
     for (int i = 1; i <= nTests; i++) {
         char inputFile[100];
@@ -146,19 +126,6 @@ int main(int argc, char* argv[]) {
             alarm(0);
             signal(SIGALRM, SIG_IGN);
 
-            // Check for Memory Limit Exceeded FIRST (before checking signals)
-            if (was_oom_killed(pid)) {
-                fprintf(judgeOutput, "Memory Limit Exceeded\n");
-                fflush(judgeOutput);
-                fclose(judgeOutput);
-                dup2(a1, STDOUT_FILENO);
-                dup2(a2, STDIN_FILENO);
-                dup2(a3, STDERR_FILENO);
-
-                return EXIT_SUCCESS;
-            }
-
-            // NOW cleanup
             cleanup_cgroup(pid);
 
             if (timeout) {
@@ -176,12 +143,7 @@ int main(int argc, char* argv[]) {
 
                 // Check if SIGKILL was due to memory limit exceeded
                 if (sig == SIGKILL) {
-                    // Double-check if it was OOM (in case cgroup events weren't updated yet)
-                    if (was_oom_killed(pid)) {
-                        fprintf(judgeOutput, "Memory Limit Exceeded\n");
-                    } else {
-                        fprintf(judgeOutput, "Runtime Error (process killed by signal %d)\n", sig);
-                    }
+                    fprintf(judgeOutput, "Memory Limit Exceeded\n");
                 } else {
                     fprintf(judgeOutput, "Runtime Error (signal %d)\n", sig);
                 }
@@ -207,7 +169,6 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Test comparison code (your original code)
         file = fopen(soloutFile, "rb");
         stat(soloutFile, &st);
         buffer1 = malloc(st.st_size + 1);
